@@ -36,6 +36,8 @@ chmod +x AudiobookOffline-x86_64.AppImage
 
 (or just tick "Allow executing" in your file manager's Properties dialog and double-click it). Needs a 64-bit Linux desktop from roughly the last couple of years.
 
+It'll show up as a generic executable icon in your file manager rather than the app's real icon — that's normal for a plain AppImage and not a sign anything's wrong. If you want a proper icon, an app-launcher entry, and update handling, install [Gear Lever](https://github.com/mijorus/gearlever) (or AppImageLauncher) and point it at the file once; neither is required just to run it.
+
 ### Running from source
 
 If you'd rather run it from source (or you're on an architecture the AppImage doesn't cover):
