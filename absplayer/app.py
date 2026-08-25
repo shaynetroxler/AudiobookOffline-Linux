@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gst", "1.0")
-from gi.repository import Adw, GLib, Gst, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gst, Gtk, Pango
 
 from . import covers, downloads
 from .client import ABSClient, ABSError
@@ -16,6 +18,31 @@ from .models import LibraryItem
 from .mpris import MprisService
 
 Gst.init(None)
+
+APP_VERSION = "1.0.1"
+MAC_URL = "https://github.com/shaynetroxler/AudiobookOffline"
+WINDOWS_URL = "https://github.com/shaynetroxler/AudiobookOffline-Windows"
+LINUX_URL = "https://github.com/shaynetroxler/audiobookshelf-linux"
+
+# A plain colored circle stands in for a platform-native "download status" dot:
+# blue+arrow when a Continue Listening book isn't downloaded yet, green once it is.
+_DOWNLOAD_INDICATOR_CSS = b"""
+.download-indicator-needed {
+    background-color: #3584e4;
+    color: white;
+    border-radius: 999px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+}
+.download-indicator-done {
+    background-color: #26a269;
+    border-radius: 999px;
+    min-width: 12px;
+    min-height: 12px;
+    padding: 0;
+}
+"""
 
 
 def run_in_background(work, on_done):
@@ -187,6 +214,7 @@ class LibraryPage(Gtk.Box):
         row.append(text_box)
 
         if removable:
+            row.append(self._make_download_indicator(item))
             remove_button = Gtk.Button(label="✕", tooltip_text="Remove from Continue Listening")
             remove_button.add_css_class("flat")
             remove_button.connect("clicked", lambda _b: self._on_remove_continue(item))
@@ -196,6 +224,70 @@ class LibraryPage(Gtk.Box):
         list_row.set_child(row)
         list_row.item = item
         return list_row
+
+    def _make_download_indicator(self, item):
+        # Hidden until the background fetch below learns whether this item's
+        # tracks are on disk -- there's no track list on the shelf's LibraryItem
+        # itself, only on the fuller detail fetched here.
+        button = Gtk.Button(label="", visible=False, valign=Gtk.Align.CENTER)
+        button.add_css_class("flat")
+        button.item_tracks = None
+        button.connect("clicked", lambda _b: self._on_download_indicator_clicked(item, button))
+
+        client = self.client
+
+        def done(tracks, error):
+            if error is not None or tracks is None:
+                return
+            button.item_tracks = tracks
+            self._refresh_download_indicator(item, button)
+
+        run_in_background(lambda: client.item_detail(item.id).tracks, done)
+        return button
+
+    def _refresh_download_indicator(self, item, button):
+        tracks = button.item_tracks
+        if tracks is None:
+            return
+        button.remove_css_class("download-indicator-needed")
+        button.remove_css_class("download-indicator-done")
+        if downloads.is_fully_downloaded(item.id, tracks):
+            button.set_label("")
+            button.add_css_class("download-indicator-done")
+            button.set_tooltip_text("Downloaded for offline listening")
+            # Let clicks fall through to the row underneath instead of the dot
+            # eating them -- there's nothing left to do here but open the book.
+            button.set_can_target(False)
+        else:
+            button.set_label("⬇")
+            button.add_css_class("download-indicator-needed")
+            button.set_tooltip_text("Download for offline listening")
+            button.set_can_target(True)
+        button.set_sensitive(True)
+        button.set_visible(True)
+
+    def _on_download_indicator_clicked(self, item, button):
+        tracks = button.item_tracks
+        if not tracks:
+            return
+        button.set_sensitive(False)
+        client = self.client
+
+        def progress(done, total):
+            GLib.idle_add(button.set_label, f"{done}/{total}")
+
+        def work():
+            downloads.download_tracks(client, item.id, tracks, progress)
+
+        def done(_result, error):
+            if error is not None:
+                button.set_label("⬇")
+                button.set_tooltip_text("Download failed — tap to retry")
+                button.set_sensitive(True)
+                return
+            self._refresh_download_indicator(item, button)
+
+        run_in_background(work, done)
 
     def _load_cover(self, item, picture_widget):
         client = self.client
@@ -353,6 +445,7 @@ class PlayerPage(Gtk.Box):
         self.playback_rate = 1.0
         self._sleep_timer_source = None
         self._sleep_end_of_chapter = False
+        self._sleep_deadline = None
 
         back_button = Gtk.Button(label="← Back")
         back_button.set_halign(Gtk.Align.START)
@@ -464,7 +557,13 @@ class PlayerPage(Gtk.Box):
         sleep_model = Gtk.StringList.new(["Sleep: Off", "5 min", "10 min", "15 min", "30 min", "45 min", "60 min", "End of Chapter"])
         self.sleep_dropdown = Gtk.DropDown(model=sleep_model, selected=0)
         self.sleep_dropdown.connect("notify::selected", self._on_sleep_changed)
-        options_row.append(self.sleep_dropdown)
+        sleep_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.CENTER)
+        sleep_box.append(self.sleep_dropdown)
+        self.sleep_status_label = Gtk.Label(label="", visible=False, halign=Gtk.Align.CENTER)
+        self.sleep_status_label.add_css_class("dim-label")
+        self.sleep_status_label.add_css_class("caption")
+        sleep_box.append(self.sleep_status_label)
+        options_row.append(sleep_box)
 
         content.append(options_row)
 
@@ -736,13 +835,33 @@ class PlayerPage(Gtk.Box):
             GLib.source_remove(self._sleep_timer_source)
             self._sleep_timer_source = None
         self._sleep_end_of_chapter = False
+        self._sleep_deadline = None
         choice = self._sleep_options[dropdown.get_selected()]
         if choice == 0:
+            self.sleep_status_label.set_visible(False)
             return
         if choice == -1:
             self._sleep_end_of_chapter = True
+            self.sleep_status_label.set_visible(True)
+            self._update_sleep_countdown()
             return
+        self._sleep_deadline = time.monotonic() + choice * 60
+        self.sleep_status_label.set_visible(True)
+        self._update_sleep_countdown()
         self._sleep_timer_source = GLib.timeout_add_seconds(choice * 60, self._on_sleep_fire)
+
+    def _update_sleep_countdown(self):
+        if self._sleep_deadline is not None:
+            remaining = max(0.0, self._sleep_deadline - time.monotonic())
+            self.sleep_status_label.set_label(f"Sleeping in {format_time(remaining)}")
+        elif self._sleep_end_of_chapter and self.chapters:
+            ok, position = self.playbin.query_position(Gst.Format.TIME)
+            if not ok:
+                return
+            chapter = self.chapters[self.chapter_index]
+            global_pos = self._track_start_offset(self.track_index) + position / Gst.SECOND
+            remaining = max(0.0, chapter.end - global_pos)
+            self.sleep_status_label.set_label(f"Sleeping at end of chapter ({format_time(remaining)})")
 
     def _on_sleep_fire(self):
         self._sleep_timer_source = None
@@ -757,6 +876,7 @@ class PlayerPage(Gtk.Box):
             self._report_progress()
 
     def _on_tick(self):
+        self._update_sleep_countdown()
         if not self.tracks or self.seeking:
             return True
         ok, position = self.playbin.query_position(Gst.Format.TIME)
@@ -904,12 +1024,75 @@ class StatsPage(Gtk.Box):
         return box
 
 
+class HelpWindow(Adw.Window):
+    def __init__(self, parent):
+        super().__init__(transient_for=parent, modal=True, title="Help", default_width=440, default_height=520)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(Adw.HeaderBar())
+
+        scroller = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        content = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=16,
+            margin_top=16, margin_bottom=16, margin_start=20, margin_end=20,
+        )
+        scroller.set_child(content)
+        toolbar_view.set_content(scroller)
+        self.set_content(toolbar_view)
+
+        content.append(self._section(
+            "Downloading for offline listening",
+            "Open a book and tap Download to save it to this device, or Remove Download to free up space.\n\n"
+            "On the Continue Listening shelf, each book also shows a status dot: a blue ⬇ means it hasn't "
+            "been downloaded yet — tap it to download without opening the book. A green dot means it's "
+            "already downloaded and ready to take with you.",
+        ))
+        content.append(self._section(
+            "Sleep timer",
+            "Pick a duration (or \"End of Chapter\") from the Sleep dropdown while playing. The label "
+            "underneath counts down how much listening time is left before playback pauses itself.",
+        ))
+
+        other_heading = Gtk.Label(label="Other platforms", xalign=0)
+        other_heading.add_css_class("heading")
+        content.append(other_heading)
+        other_label = Gtk.Label(
+            label=f'Audiobook Offline is also available for <a href="{MAC_URL}">macOS</a> '
+                  f'and <a href="{WINDOWS_URL}">Windows</a>.',
+            use_markup=True, wrap=True, xalign=0,
+        )
+        content.append(other_label)
+
+    @staticmethod
+    def _section(heading_text, body_text):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        heading = Gtk.Label(label=heading_text, xalign=0)
+        heading.add_css_class("heading")
+        box.append(heading)
+        body = Gtk.Label(label=body_text, xalign=0, wrap=True, justify=Gtk.Justification.LEFT)
+        box.append(body)
+        return box
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Audiobook Offline", default_width=480, default_height=640)
         self.set_icon_name("org.shayne.AudiobookOffline")
         self.stack = Gtk.Stack()
-        self.set_content(self.stack)
+
+        menu = Gio.Menu()
+        menu.append("Help", "app.help")
+        menu.append("About Audiobook Offline", "app.about")
+        menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Main Menu")
+
+        header = Adw.HeaderBar()
+        header.pack_end(menu_button)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(header)
+        toolbar_view.set_content(self.stack)
+        self.set_content(toolbar_view)
+
         self.active_player = None
         self.mpris = MprisService(
             get_status=self._mpris_status,
@@ -1024,10 +1207,47 @@ class MainWindow(Adw.ApplicationWindow):
 class Application(Adw.Application):
     def __init__(self):
         super().__init__(application_id="org.shayne.AudiobookOffline")
+        for name, handler in (("help", self._on_help), ("about", self._on_about)):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", handler)
+            self.add_action(action)
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(_DOWNLOAD_INDICATOR_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
 
     def do_activate(self):
-        window = MainWindow(self)
+        # GApplication routes a second launch to this same do_activate() on the
+        # already-running primary instance -- without this check it would spawn
+        # a whole separate MainWindow each time instead of just refocusing.
+        window = self.get_active_window()
+        if window is None:
+            window = MainWindow(self)
         window.present()
+
+    def _on_help(self, _action, _param):
+        HelpWindow(self.get_active_window()).present()
+
+    def _on_about(self, _action, _param):
+        about = Adw.AboutWindow(
+            transient_for=self.get_active_window(),
+            application_name="Audiobook Offline",
+            application_icon="org.shayne.AudiobookOffline",
+            version=APP_VERSION,
+            developer_name="Shayne Troxler",
+            license_type=Gtk.License.MIT_X11,
+            copyright="© 2026 Shayne Troxler",
+            website=LINUX_URL,
+            issue_url=f"{LINUX_URL}/issues",
+            comments="A Linux client for Audiobookshelf with true offline downloads.",
+        )
+        about.add_link("macOS version", MAC_URL)
+        about.add_link("Windows version", WINDOWS_URL)
+        about.present()
 
 
 def main():
