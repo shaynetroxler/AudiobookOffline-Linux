@@ -1028,8 +1028,11 @@ class HelpWindow(Adw.Window):
     def __init__(self, parent):
         super().__init__(transient_for=parent, modal=True, title="Help", default_width=440, default_height=520)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(Adw.HeaderBar())
+        # A plain Box + HeaderBar rather than Adw.ToolbarView: ToolbarView needs
+        # libadwaita 1.4+, which would force the AppImage build onto a distro
+        # too new to keep glibc compatibility with older target systems.
+        window_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        window_box.append(Adw.HeaderBar())
 
         scroller = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         content = Gtk.Box(
@@ -1037,8 +1040,8 @@ class HelpWindow(Adw.Window):
             margin_top=16, margin_bottom=16, margin_start=20, margin_end=20,
         )
         scroller.set_child(content)
-        toolbar_view.set_content(scroller)
-        self.set_content(toolbar_view)
+        window_box.append(scroller)
+        self.set_content(window_box)
 
         content.append(self._section(
             "Downloading for offline listening",
@@ -1088,10 +1091,13 @@ class MainWindow(Adw.ApplicationWindow):
         header = Adw.HeaderBar()
         header.pack_end(menu_button)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header)
-        toolbar_view.set_content(self.stack)
-        self.set_content(toolbar_view)
+        # Plain Box + HeaderBar, not Adw.ToolbarView -- see the note in
+        # HelpWindow above.
+        window_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        window_box.append(header)
+        self.stack.set_vexpand(True)
+        window_box.append(self.stack)
+        self.set_content(window_box)
 
         self.active_player = None
         self.mpris = MprisService(

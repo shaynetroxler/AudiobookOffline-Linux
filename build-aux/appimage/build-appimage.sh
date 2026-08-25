@@ -141,6 +141,39 @@ rm -rf "$NOOP_PATCHELF_DIR" "$LINUXDEPLOY_EXTRACTED"
 cp "$SCRIPT_DIR/AppRun" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
 
+log_step "Filling in any shared libraries linuxdeploy's walk missed"
+# linuxdeploy only recurses through the deps of the files we hand it directly;
+# a lib that's pulled in as someone else's dependency (e.g. libfribidi via
+# libpango, which GObject-Introspection dlopen()s rather than linking) can
+# still end up with ITS OWN deps unresolved. `ldd` can't detect that reliably
+# from inside this build container, because the container has the full apt
+# dependency tree installed system-wide -- ldd would happily resolve a "missing"
+# lib from the SYSTEM path even when it never made it into the AppDir. So this
+# reads each file's DT_NEEDED entries directly (readelf, no path resolution
+# involved) and loops to a fixed point instead.
+BASE_LIBS_REGEX='^(linux-vdso\.so.*|ld-linux-x86-64\.so\.2|libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libresolv\.so\.2|libutil\.so\.1|libnsl\.so\.1)$'
+fill_missing_libs() {
+    local changed=1 pass=0
+    while [ "$changed" -eq 1 ]; do
+        changed=0
+        pass=$((pass + 1))
+        while IFS= read -r -d '' f; do
+            while IFS= read -r needed; do
+                [ -z "$needed" ] && continue
+                [[ "$needed" =~ $BASE_LIBS_REGEX ]] && continue
+                [ -f "$APPDIR/usr/lib/$needed" ] && continue
+                src="$(find "/usr/lib/$MULTIARCH" -maxdepth 1 -name "$needed" | head -1)"
+                if [ -n "$src" ]; then
+                    cp -aL "$src" "$APPDIR/usr/lib/$needed"
+                    echo "  [$pass] added $needed (needed by $(basename "$f"))"
+                    changed=1
+                fi
+            done < <(readelf -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+        done < <(find "$APPDIR/usr/lib" "$APPDIR/usr/bin" -type f \( -name '*.so*' -o -perm -u+x \) -print0 2>/dev/null)
+    done
+}
+fill_missing_libs
+
 log_step "Building final AppImage"
 APPIMAGE_PATH="$DIST_DIR/${APP_NAME}-x86_64.AppImage"
 ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL_BIN" "$APPDIR" "$APPIMAGE_PATH"

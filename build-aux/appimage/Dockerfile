@@ -1,8 +1,12 @@
-# Build environment for the AppImage: Ubuntu 24.04 gives us libadwaita 1.5
-# (we need 1.4+ for Adw.ToolbarView) while staying well behind Arch's
-# bleeding-edge glibc, so the AppImage runs on a broader range of target
-# systems than building on the dev machine directly would.
-FROM ubuntu:24.04
+# Build environment for the AppImage: Debian 12 (glibc 2.36, mid-2023) is the
+# oldest widely-used base with a libadwaita new enough for Adw.AboutWindow
+# (1.2+) and everything else the app uses -- Adw.ToolbarView was deliberately
+# avoided in app.py because it needs 1.4+, which would have forced a much
+# newer (and less portable) glibc. A first build on Ubuntu 24.04 (glibc 2.39)
+# failed to launch on a real Debian 12 machine with a GLIBC_2.38-not-found
+# error, which is what pinned this down to Debian 12 specifically rather than
+# "whatever's newest".
+FROM debian:12
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -13,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-4-1 libadwaita-1-0 libsecret-1-0 \
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-libav \
-    desktop-file-utils file curl ca-certificates \
+    desktop-file-utils file curl ca-certificates binutils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
