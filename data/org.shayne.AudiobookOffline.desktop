@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Audiobook Offline
+Comment=Audiobookshelf client with offline downloads
+Exec=python3 -m absplayer.app
+Icon=org.shayne.AudiobookOffline
+Categories=Audio;AudioVideo;Player;
+Terminal=false
+StartupWMClass=org.shayne.AudiobookOffline
