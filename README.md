@@ -6,7 +6,7 @@ A Linux counterpart to the [macOS AudiobookOffline app](https://github.com/shayn
 
 ## Status
 
-**v1.0.1** — working and in daily use, but young. Expect rough edges; fixes will land as point releases.
+**v1.0.2** — working and in daily use, but young. Expect rough edges; fixes will land as point releases. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Features
 

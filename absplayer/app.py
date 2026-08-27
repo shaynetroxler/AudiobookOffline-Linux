@@ -19,7 +19,7 @@ from .mpris import MprisService
 
 Gst.init(None)
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 MAC_URL = "https://github.com/shaynetroxler/AudiobookOffline"
 WINDOWS_URL = "https://github.com/shaynetroxler/AudiobookOffline-Windows"
 LINUX_URL = "https://github.com/shaynetroxler/audiobookshelf-linux"
@@ -438,7 +438,6 @@ class PlayerPage(Gtk.Box):
         self.tracks = []
         self.total_duration = 0.0
         self.track_index = 0
-        self.seeking = False
         self.chapters = []
         self.chapter_index = 0
         self.chapter_rows = []
@@ -496,10 +495,7 @@ class PlayerPage(Gtk.Box):
         self.position_scale.set_range(0, 1)
         self.position_scale.set_draw_value(False)
         self.position_scale.set_sensitive(False)
-        gesture = Gtk.GestureClick()
-        gesture.connect("pressed", lambda *_a: setattr(self, "seeking", True))
-        gesture.connect("released", self._on_seek_released)
-        self.position_scale.add_controller(gesture)
+        self.position_scale.connect("change-value", self._on_seek_change_value)
         content.append(self.position_scale)
 
         time_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=True)
@@ -813,10 +809,17 @@ class PlayerPage(Gtk.Box):
             return True
         return False
 
-    def _on_seek_released(self, _gesture, _n_press, _x, _y):
-        self.seeking = False
+    def _on_seek_change_value(self, _range, _scroll_type, value):
+        # GtkScale's own "change-value" fires for every user-driven move (drag,
+        # click-to-jump, arrow keys). A separate GestureClick used to track
+        # press/release here instead, but GtkRange's built-in drag gesture
+        # claims the pointer sequence as soon as a real drag starts, which
+        # cancels any other unclaimed gesture on the same sequence — so an
+        # actual scrub never delivered "released" and never seeked.
         chapter = self.chapters[self.chapter_index]
-        self._seek_to_global(chapter.start + self.position_scale.get_value(), autoplay=self._is_playing())
+        target = chapter.start + max(0.0, min(value, chapter.end - chapter.start))
+        self._seek_to_global(target, autoplay=self._is_playing())
+        return True
 
     def _on_speed_changed(self, dropdown, _pspec):
         self.playback_rate = self._speed_options[dropdown.get_selected()]
@@ -877,7 +880,7 @@ class PlayerPage(Gtk.Box):
 
     def _on_tick(self):
         self._update_sleep_countdown()
-        if not self.tracks or self.seeking:
+        if not self.tracks:
             return True
         ok, position = self.playbin.query_position(Gst.Format.TIME)
         if not ok:
