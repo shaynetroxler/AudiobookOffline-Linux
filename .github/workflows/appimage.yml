@@ -19,8 +19,19 @@ jobs:
         with:
           name: AudiobookOffline-x86_64.AppImage
           path: dist/AudiobookOffline-x86_64.AppImage
+      - name: Extract changelog section
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          awk -v ver="## ${{ github.ref_name }}" '
+            $0 ~ "^" ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          cat release-notes.md
+
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/AudiobookOffline-x86_64.AppImage
+          body_path: release-notes.md
