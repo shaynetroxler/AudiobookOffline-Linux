@@ -22,7 +22,7 @@ Gst.init(None)
 APP_VERSION = "1.0.2"
 MAC_URL = "https://github.com/shaynetroxler/AudiobookOffline"
 WINDOWS_URL = "https://github.com/shaynetroxler/AudiobookOffline-Windows"
-LINUX_URL = "https://github.com/shaynetroxler/audiobookshelf-linux"
+LINUX_URL = "https://github.com/shaynetroxler/AudiobookOffline-Linux"
 
 # A plain colored circle stands in for a platform-native "download status" dot:
 # blue+arrow when a Continue Listening book isn't downloaded yet, green once it is.
@@ -66,7 +66,7 @@ class LoginPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=48, margin_start=48, margin_end=48)
         self.on_success = on_success
 
-        self.server_entry = Gtk.Entry(placeholder_text="Server URL, e.g. http://192.168.1.136:8092")
+        self.server_entry = Gtk.Entry(placeholder_text="Server URL, e.g. http://192.168.1.10:13378")
         self.username_entry = Gtk.Entry(placeholder_text="Username")
         self.password_entry = Gtk.PasswordEntry(show_peek_icon=True)
         self.status_label = Gtk.Label(label="", wrap=True)

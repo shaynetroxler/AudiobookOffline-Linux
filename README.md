@@ -27,7 +27,7 @@ A Linux counterpart to the [macOS AudiobookOffline app](https://github.com/shayn
 
 ## Installing
 
-**Don't want to install anything or touch a terminal?** Grab the AppImage from [Releases](https://github.com/shaynetroxler/audiobookshelf-linux/releases) — it bundles GTK4, libadwaita, GStreamer, and everything else it needs, so there's nothing to install first. Download it, then:
+**Don't want to install anything or touch a terminal?** Grab the AppImage from [Releases](https://github.com/shaynetroxler/AudiobookOffline-Linux/releases) — it bundles GTK4, libadwaita, GStreamer, and everything else it needs, so there's nothing to install first. Download it, then:
 
 ```
 chmod +x AudiobookOffline-x86_64.AppImage
